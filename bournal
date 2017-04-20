@@ -1,0 +1,888 @@
+#!/bin/bash
+VERSION="Bournal 1.5, Codename: Sudo-cide"
+
+# parameter check
+if [ -n "$1" -a "$1" != "-h" -a "$1" != "-i" -a "$1" != "-l" -a "$1" != "-ls" -a "$1" != "-lst" -a "$1" != "-d"  -a "$1" != "-f" -a "$1" != "-fi" -a "$1" != "-r" -a "$1" != "-p" -a "$1" != "--help" -a "$1" != "-v" -a "$1" != "--version" -a "$1" != "--heh" ]; then
+   echo 'Invalid parameter. Type bournal -h for help.'
+   exit 1
+fi
+
+# help options
+if [ "$1" = "-h" -o "$1" = "--help" ]; then
+   echo 'Usage: bournal [OPTION]'
+   echo 'Write and encrypt journal entries'
+   echo 'When run with no option, a new entry is created.'
+   echo ''
+   echo '   -h, --help               Display this help'
+   echo '   -i                       Interactive mode'
+   echo '   -lst                     List and edit entries made today'
+   echo '   -ls [MONTH] [YEAR]       List and edit archived entries'
+   echo '   -d [MONTH] [YEAR]        List and delete archived entries'
+   echo '   -f "[PATTERN]" [MONTH]   Find text within entries'
+   echo '   -fi "[PatTerN]" [MONTH]  Find case-insensitive text'
+   echo '   -r                       Read all entries at once'
+   echo '   -p                       Change the encryption password'
+   echo '   -v, --version            Show version information'
+   echo ''
+   exit
+fi
+
+# version
+if [ "$1" = "-v" -o "$1" = "--version" ]; then
+   echo "$VERSION"
+   exit
+fi
+
+# Lockfile check
+LOCK="/tmp/bournal.lock"
+if [ ! -e "$LOCK" ]; then
+   trap "rm -f $LOCK; stty echo; exit" EXIT
+   echo 'Bugger off!' >"$LOCK"
+else
+   echo -e "Bournal is already running! Maybe! If not, delete the file\n$LOCK and try again."
+   exit 0
+fi
+
+# ~/.bournalrc check and load
+BRC="$HOME/.bournalrc"
+if [ ! -e "$BRC" ]; then
+   echo "File ~/.bournalrc not found. Creating default..."
+   echo "# Bournal configuration file" >"$BRC"
+   echo "EDITOR='nanoeditor'" >>"$BRC"
+   echo "# EDITOR='vimeditor'" >>"$BRC"
+   echo "# EDITOR='jededitor'" >>"$BRC"
+   echo "DIR=\"\$HOME/.bournal\"" >>"$BRC"
+   echo "# DIR='/media/USB_VOLNAME/.bournal'" >>"$BRC"
+fi
+. "$BRC"
+
+CPTCHK="$(ls $DIR|grep .cpt)"
+if [ -n "$CPTCHK" ]; then
+   echo -e "To curb the whining of the masses, Bournal now uses gpg instead of ccrypt.\nRun the conversion script to update your old entries--OR ELSE."
+   echo "Dun dun dunnnn..."
+   exit
+fi
+
+# Set umask for security, set permissions just in case
+umask 066
+if [ -d "$DIR" ]; then
+   chmod 700 "$DIR"
+fi
+ENTRIES=$(ls "$DIR" 2>/dev/null)
+if [ -n "$ENTRIES" ]; then
+   chmod 600 "$DIR"/*
+fi
+if [ -e "$DIR/.passwd.gpg" ]; then
+   chmod 600 "$DIR"/.passwd.gpg
+fi
+
+# Editors with formatting options
+vimeditor ()
+{
+  vim + -c start -c "set textwidth=70" -c "set filetype=txt" -c "syntax on" -c "set syntax=bournal" -c "set nobackup" -c "set nowritebackup" $1
+}
+
+nanoeditor ()
+{
+  LINES=`wc -l $1|cut -d" " -f1`
+  nano +"$LINES" -L $1
+}
+
+jededitor ()
+{
+  LINES=$(wc -l $1|cut -d" " -f1)
+  jed $1 -f "set_comment_info(\"Text\", \"# \",\"\",0);create_syntax_table(\"bournal\");define_syntax(\"#\", \"\",'%',\"bournal\");set_color(\"comment\",\"brightcyan\",\"black\");use_syntax_table(\"bournal\");" -tmp -g $[$LINES+1]
+}
+
+# Functions for repetitive code
+datevars ()
+{
+  DATE=$(date '+%a %b %e %H:%M:%S %Z %Y')
+  FDATE=$(date +%b-%d-%Y-%H%M%S) # Pinafore
+  FILE="$DIR/$FDATE"
+  EFILE="$FILE.gpg"
+}
+datevars
+
+monthgrep ()
+{
+  egrep -io "jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec"|
+  sed 's/^[a-z]/\U&/g'
+}
+
+passchk ()
+{
+OIFS="$IFS"
+IFS="
+"
+ if [ -z "$PASS" ]; then
+    PASS=`gpg -d "$DIR"/.passwd.gpg 2>/dev/null`
+    echo ''
+    if [ -z "$PASS" ]; then
+       echo "That's not right..."
+       PASS=`gpg -d "$DIR"/.passwd.gpg 2>/dev/null`
+       echo ''
+    fi
+    if [ -z "$PASS" ]; then
+       echo "Nope! Last try, slugger..."
+       PASS=`gpg -d "$DIR"/.passwd.gpg 2>/dev/null`
+       echo ''
+    fi
+    if [ -z "$PASS" ]; then
+       echo 'Password is incorrect, butterfingers.'
+       if [ "$INTER" = "1" ]; then
+          WRONGPASS="DOH"
+       else
+          exit 1
+       fi
+    fi
+ fi
+IFS="$OIFS"
+}
+
+recryptrap ()
+{
+  if [ -e "$FILE" ]; then
+     gpg --passphrase "$PASS" -c "$FILE" 2>/dev/null
+     rm -f "$FILE"
+  fi
+  rm -f "$LOCK"
+  exit
+}
+
+intrap ()
+{
+  echo ''
+  echo "CTRL+C'd! Why did you kill me, mommy?"
+  exit 130
+}
+
+header ()
+{
+  read -p "Entry subject: " SUBJ
+  echo "# Subject: $SUBJ" >>"$FILE"
+  echo -e "# "$DATE"\n" >>"$FILE"
+}
+
+posty ()
+{
+  EDCHK="$(md5sum "$FILE" | cut -d" " -f1)"
+  "$EDITOR" "$FILE"
+  EDCHK2="$(md5sum "$FILE" | cut -d" " -f1)"
+  gpg --passphrase "$PASS" -c "$FILE" 2>/dev/null
+  rm -f "$FILE"
+  if [ "$EDCHK" = "$EDCHK2" ]; then
+        echo 'Brainfart alert! No edits were made to the entry.'
+	BFA="1"
+     if [ "$INTER" = "1" ]; then
+        echo -n ''
+     else
+        exit
+     fi
+  fi
+}
+
+brainfart ()
+{
+  SASS=`echo "$RANDOM"|cut -c2`
+  if [ "$SASS" -le "2" ]; then
+     LIP='File saved and encrypted. Probably...'
+  elif [ "$SASS" -le "4" ]; then
+     LIP='Entry saved and encrypted, Mr. Bond.'
+  elif [ "$SASS" -le "6" ]; then
+     LIP='Entry saved and encrypted, you sneaky bastid.'
+  elif [ "$SASS" -le "8" ]; then
+     LIP='Edit, rinse, repeat.'
+  else
+     LIP='Entry saved and encrypted. You feel leet yet?'
+  fi
+  if [ "$BFA" != "1" ]; then
+     echo "$LIP"
+  else
+     BFA=''
+     intchk
+  fi
+}
+
+oldcheck ()
+{
+  FCHK=`ls "$DIR"/*.gpg 2>/dev/null`
+  if [ -n "$FCHK" ]; then
+     OLDCHK="$(gpg --passphrase "$PASS" -d "$DIR"/`ls -1 "$DIR"|head -1` >/dev/null 2>&1 && echo 1)"
+     if [ -z "$OLDCHK" ]; then
+        echo "Password does not match older entries."
+	if [ "$INTER" = "1" ]; then
+	   WRONGPASS="DOH"
+	else
+           exit 1
+	fi
+     fi
+  fi
+}
+
+newpasswd ()
+{
+OIFS="$IFS"
+IFS="
+"
+   read -s -p "Create a new password: " PASS
+   echo ''
+   read -s -p "Reenter password: " PASS2
+   echo ''
+   while [ "$PASS" != "$PASS2" ]; do
+      echo 'Much like your socks, those passwords do not match.'
+      echo 'Try again.'
+      read -s -p "Create a new password: " PASS
+      echo ''
+      read -s -p "Reenter password: " PASS2
+      echo ''
+   done
+   echo "$PASS" > "$DIR"/.passwd
+   gpg --passphrase "$PASS" -c "$DIR"/.passwd 2>/dev/null
+   rm -f "$DIR"/.passwd
+   echo 'New password created. Write it on your hand.'
+IFS="$OIFS"
+}
+
+changepass ()
+{
+OIFS="$IFS"
+IFS="
+"
+  read -s -p "Enter old password: " PASS
+  echo ''
+  oldcheck
+  if [ -n "$WRONGPASS" ]; then
+     WRONGPASS=''
+  else
+     read -s -p "New Password: " NPASS
+     echo ''
+     read -s -p "New Password again: " NPASS2
+     echo ''
+     if [ "$NPASS" != "$NPASS2" ]; then
+        echo "Passwords do not match"
+     else
+	for i in $(ls -1A "$DIR"); do gpg --passphrase "$PASS" -d "$DIR/$i" 2>/dev/null >"$DIR"/`echo $i|sed 's/.gpg//'`; rm -f "$DIR/$i"; done
+        echo "$NPASS" >"$DIR"/.passwd
+	for i in $(ls -1A "$DIR"); do gpg --passphrase "$NPASS" -c "$DIR/$i" 2>/dev/null; rm -f "$DIR/$i"; done
+        echo 'Password changed. You will promptly forget it.'
+     fi
+  fi
+IFS="$OIFS"
+}
+
+intchk ()
+{
+  if [ "$INTER" = "1" ]; then
+     echo -n ''
+  else
+     exit
+  fi
+}
+
+intchkbrk ()
+{
+  if [ "$INTER" = "1" ]; then
+     break
+  else
+     exit 0
+  fi
+}
+
+oldornew ()
+{
+  trap - EXIT
+  trap recryptrap EXIT
+  trap intrap INT TERM
+  header
+  posty
+  brainfart
+}
+
+searchtime () {
+if [ $PERCENT -lt "10" ]; then
+   echo -n ""
+elif [ $PERCENT -lt "101" ]; then
+   echo -n ""
+fi
+   PERCENT=$((100*$START/$MAX))
+   START=$(($START+1))
+   echo -n "$PERCENT%"
+}
+
+readall ()
+{
+   for i in $(ls "$DIR" | sort -t"-" -k 3,3 -k 1,1M -k 2,2)
+   do gpg --passphrase "$PASS" -d "$DIR/$i" 2>/dev/null
+   echo -e "\n------\n"
+   done |
+   less
+}
+
+# dependency checks
+GPGCHK=`which gpg`
+if [ -z "$GPGCHK" ]; then
+   echo 'GPG not found.'
+   echo 'Please install it through your package manager or with source code'
+   echo 'available at this address. http://www.gnupg.org/'
+   exit 1
+fi
+
+VIMCHK=`which vim`
+if [ -z "$VIMCHK" -a "$EDITOR" = "vimeditor" ]; then
+   echo 'vim not found.'
+   echo 'Please install it through your package manager or with source code'
+   echo 'available at this address. http://www.vim.org'
+   exit 1
+fi
+
+NANOCHK=`which nano`
+if [ -z "$NANOCHK" -a "$EDITOR" = "nanoeditor" ]; then
+   echo 'nano not found.'
+   echo 'Please install it through your package manager or with source code'
+   echo 'available at this address. http://www.nano-editor.org'
+   exit 1
+fi
+
+JEDCHK=`which jed`
+if [ -z "$JEDCHK" -a "$EDITOR" = "jededitor" ]; then
+   echo 'jed not found.'
+   echo 'Please install it through your package manager or with source code'
+   echo 'available at this address. http://www.jedsoft.org/jed/'
+   exit 1
+fi
+
+# Create vim syntax file
+if [ "$EDITOR" = "vimeditor" ]; then
+   VSNTX="$HOME/.vim/syntax/bournal.vim"
+   if [ -e "$VSNTX" ]; then
+      echo -n ''
+   else
+      mkdir -p "$HOME/.vim/syntax/"
+      echo 'if exists("b:current_syntax")' >>"$VSNTX"
+      echo "  finish" >>"$VSNTX"
+      echo -e "endif\n" >>"$VSNTX"
+      echo 'syn match   bournalHeader   "^# Subject: .*\n#.*20[0-9][0-9]$"'  >>"$VSNTX"
+      echo 'syn match bournalHeader "^# Subject: .*\n^# [Mon|Teu|Wed|Thu|Fri|Sat|Sun].*20[0-9][0-9]$"hs=s,he=e'  >>"$VSNTX"
+      echo -e 'hi bournalHeader ctermfg=Grey\n' >>"$VSNTX"
+      echo -e 'let b:current_syntax = "bournal"\n' >>"$VSNTX"
+   fi
+fi
+
+# Create syntax highligting for nano
+if [ "$EDITOR" = "nanoeditor" ]; then
+   NANORC="$HOME/.nanorc"
+   NANOSYN=`grep -s 'syntax "bournal"' "$NANORC"`
+   nanohl ()
+   {
+     echo 'syntax "bournal" "(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-[0-3][0-9]-20[0-9][0-9]-[0-2][0-9][0-5][0-9][0-5][0-9]$"' >>"$NANORC"
+     echo 'color brightblue "^# Subject: .*"' >>"$NANORC"
+     echo 'color brightblue "^# (Mon|Tue|Wed|Thu|Fri|Sat|Sun).*20[0-9][0-9]$"' >>"$NANORC"
+   }
+   if [ -e "$NANORC" -a -n "$NANOSYN" ]; then
+      echo -n ''
+   elif [ -e "$NANORC" -a -z "$NANOSYN" ]; then
+      nanohl
+   else
+      nanohl
+   fi
+fi
+
+# Entry directory check and creation
+if [ -d "$DIR" ]; then
+   echo -n ''
+else
+   echo "Directory "$DIR" not found. Creating..."
+   mkdir "$DIR"
+   newpasswd
+   if [ -z "$1" ]; then
+      header
+      posty
+      brainfart
+      exit
+   else
+      echo ''
+   fi
+fi
+
+# Password file check and creation
+if [ -e "$DIR"/.passwd.gpg ]; then
+   echo -n ''
+elif [ -e "$DIR"/.passwd ]; then
+   echo -e "Your password file is unencrypted. How unsecure is THAT?\nYou should totally enter a new one."
+   rm "$DIR"/.passwd
+   changepass
+   exit
+else
+   echo -e "Password file not found. If you have old entries, enter\nthe password used to encrypt them."
+   changepass
+   exit
+fi
+
+# Unencrypted file check
+NONEMPTY=`ls -A1 "$DIR"`
+NOCRYPT=`ls -1 "$DIR"|grep -v gpg|grep -v swp|grep [A-Z][a-z][a-z]-[0-9][0-9]-20[0-9][0-9]-[0-9]*`
+if [ -n "$NOCRYPT" -a -n "$NONEMPTY" ]; then
+   echo -e "You have unencrypted files! WTF? They will have to be\nencrypted at once to avoid overwriting old entries."
+   passchk
+   for CRYPTY in $NOCRYPT; do
+   gpg --passphrase "$PASS" -c "$DIR/$CRYPTY" 2>/dev/null
+   rm -f "$DIR/$CRYPTY"
+   done
+   echo -e "Files done been encrypted!"
+   exit
+fi
+
+# Vim recovery file check
+SWPCHK=`ls -1 "$DIR"|grep -v gpg|grep "^.*\.swp"`
+if [ -n "$SWPCHK" ]; then
+   echo "Vim recovery files found. You trip over the power cord again?"
+   echo "$SWPCHK"
+   sleep .5
+fi
+   
+# Sort and list entries for editing
+lssubsel ()
+{
+	      PS3="Select an entry to edit: "
+	      OLD_IFS="$IFS"
+IFS="
+"
+	      select j in 'EXIT' $(for k in $LSFILES; do gpg --passphrase "$PASS" -d "$k" 2>/dev/null|head -1|sed 's/^\(# Subject: \)$/\1(No Subject)/g'|cut -d" " -f3-;done); do
+		if [ -z "$j" ]; then
+		   echo "That was not an option."
+		   intchkbrk
+		elif [ "$j" = 'EXIT' ]; then
+		   echo "You selected NOTHING."
+		   BFA=''
+		   intchkbrk
+		else
+		   let REPLY=REPLY-1
+		   FILE=$(echo "$LSFILES"|nl -s" " -w1|grep "^$REPLY "|cut -d" " -f2-|sed 's/.gpg//')
+		   gpg --passphrase "$PASS" -d "$FILE".gpg >"$FILE" 2>/dev/null
+		   rm -f "$FILE".gpg
+                   posty
+		fi
+		break
+              done
+	      IFS="$OLD_IFS"
+              if [ "$INTER" = "1" -a -z "$j" -a -z "$BFA" ]; then
+                 BREAKY="1"
+              elif [ "$INTER" = "1" -a "$j" = 'EXIT' ]; then
+	         BREAKY="1"
+              elif [ "$INTER" = "1" -a -z "$BFA" ]; then
+                 echo 'Thank god you edited that. The typos were driving me nuts.'
+		 BREAKY="1"
+              elif [ "$INTER" = "1" -a "$BFA" = "1" ]; then
+	         BFA=''
+	         BREAKY="1"
+              else
+                 echo 'You have finished re-writing history. Good jeorb.'
+                 exit
+              fi
+}
+listy () {
+  LMONTH=`echo "$LISTY"|monthgrep`
+  LYEAR=$(echo "$LISTY"|egrep -io "[0-9][0-9]"|tail -1|sed 's/^/20/')
+  if [ -z "$LISTY" ]; then
+     LISTF=$(for LISTN in $(ls -1 "$DIR" 2>/dev/null|cut -d"-" -f1-3); do
+     echo $LISTN; done|
+     sort -t"-" -k 3,3 -k 1,1M -k 2,2|
+     uniq -c|
+     awk -F" " '{print $2,"("$1,"posts)"}')
+  elif [ -n "$LMONTH" -a -n "$LYEAR" ]; then
+     LISTF=$(for LISTN in $(ls -1 "$DIR"/"$LMONTH"-*-"$LYEAR"-*.gpg 2>/dev/null|cut -d"-" -f1-3); do
+     echo $LISTN; done|
+     egrep -o "$LMONTH-..-$LYEAR"|
+     sort -t"-" -k 3,3 -k 1,1M -k 2,2|
+     uniq -c|
+     awk -F" " '{print $2,"("$1,"posts)"}')
+  elif [ -n "$LMONTH" -a -z "$LYEAR" ]; then
+     LISTF=$(for LISTN in $(ls -1 "$DIR"/"$LMONTH"*.gpg 2>/dev/null|cut -d"-" -f1-3); do
+     echo $LISTN; done|
+     egrep -o "$LMONTH-..-...."|
+     sort -t"-" -k 3,3 -k 1,1M -k 2,2|
+     uniq -c|
+     awk -F" " '{print $2,"("$1,"posts)"}')
+  elif [ -z "$LMONTH" -a -n "$LYEAR" ]; then
+     LISTF=$(for LISTN in $(ls -1 "$DIR"/*-*-"$LYEAR"-*.gpg 2>/dev/null|cut -d"-" -f1-3); do
+     echo $LISTN; done|
+     egrep -o "...-..-$LYEAR"|
+     sort -t"-" -k 3,3 -k 1,1M -k 2,2|
+     uniq -c|
+     awk -F" " '{print $2,"("$1,"posts)"}')
+     #LISTF=$(ls -1 "$DIR"/*-*-"$LYEAR"-*.gpg 2>/dev/null|cut -d"-" -f1-3|egrep -o "...-..-$LYEAR"|sort -t"-" -k 3,3 -k 1,1M -k 2,2|uniq)
+  fi
+  if [ -n "$LISTF" ]; then
+     passchk
+     PS3="Select a day: "
+     OIFS="$IFS"
+IFS="
+"
+     select i in 'Nuts to this!' $LISTF; do
+     IFS="$OIFS"
+        if [ -z "$i" ]; then
+           echo 'Yeeeeah... that was not an option.'
+        elif [ "$i" = 'Nuts to this!' ]; then
+           echo 'No entry selected. Fine. Be that way. BYE.'
+	   intchkbrk
+        else
+	   if [ -n "$WRONGPASS" -a -n "$INTER" ]; then
+	      WRONGPASS=''
+	      break
+	   else
+	      ii=$(echo $i|cut -d' ' -f1)
+	      LSFILES=$(ls "$DIR/$ii"-*.gpg)
+              lssubsel
+	      if [ "$BREAKY" = "1" ]; then
+	         BREAKY=''
+	         break
+              fi
+	   fi
+        fi
+     done
+  else
+     ENTRIES=$(ls "$DIR")
+     if [ -z "$ENTRIES" ]; then
+        echo 'No entries created yet. You need to get out more.'
+     else
+        echo 'Date out of range. Lolwut?'
+     fi
+     if [ "$INTER" != "1" ]; then
+        exit
+     fi
+  fi
+}
+if [ "$1" = "-l" -o "$1" = "-ls" ]; then
+  if [ -n "$2" ]; then
+     LISTY="$@"
+  fi
+   listy
+fi
+
+if [ "$1" = "-lst" ]; then
+   ENTRIES=$(ls "$DIR")
+   LSFILES=$(ls "$DIR"/`date +%b-%d-%Y`-*.gpg 2>/dev/null)
+   if [ -z "$ENTRIES" ]; then
+      echo 'No entries created yet. You need to get out more.'
+   elif [ -z "$LSFILES" ]; then
+      echo 'No entries made today. Write about that! '
+      exit
+   else
+      passchk
+      lssubsel
+   fi
+fi
+
+
+# Read entire journal
+if [ "$1" = "-r" ]; then
+   passchk
+   readall
+   exit
+fi
+
+# Delete entries
+deletey ()
+{
+  DMONTH=`echo "$DLISTY"|monthgrep`
+  DYEAR=$(echo "$DLISTY"|egrep -io "[0-9][0-9]"|tail -1|sed 's/^/20/')
+  if [ -z "$DLISTY" ]; then
+     LISTD=$(for LISTDN in $(ls -1 "$DIR" 2>/dev/null|cut -d"-" -f1-3); do
+     echo $LISTDN; done|
+     sort -t"-" -k 3,3 -k 1,1M -k 2,2|
+     uniq -c|
+     awk -F" " '{print $2,"("$1,"posts)"}')
+  elif [ -n "$DMONTH" -a -n "$DYEAR" ]; then
+     LISTD=$(for LISTDN in $(ls -1 "$DIR"/"$DMONTH"-*-"$DYEAR"-*.gpg 2>/dev/null|cut -d"-" -f1-3); do
+     echo $LISTDN; done|
+     egrep -o "$DMONTH-..-$DYEAR"|
+     sort -t"-" -k 3,3 -k 1,1M -k 2,2|
+     uniq -c|
+     awk -F" " '{print $2,"("$1,"posts)"}')
+  elif [ -n "$DMONTH" -a -z "$DYEAR" ]; then
+     LISTD=$(for LISTDN in $(ls -1 "$DIR"/"$DMONTH"*.gpg 2>/dev/null|cut -d"-" -f1-3); do
+     echo $LISTDN; done|
+     egrep -o "$DMONTH-..-...."|
+     sort -t"-" -k 3,3 -k 1,1M -k 2,2|
+     uniq -c|
+     awk -F" " '{print $2,"("$1,"posts)"}')
+  elif [ -z "$DMONTH" -a -n "$DYEAR" ]; then
+     LISTD=$(for LISTDN in $(ls -1 "$DIR"/*-*-"$DYEAR"-*.gpg 2>/dev/null|cut -d"-" -f1-3); do
+     echo $LISTDN; done|
+     egrep -o "...-..-$DYEAR"|
+     sort -t"-" -k 3,3 -k 1,1M -k 2,2|
+     uniq -c|
+     awk -F" " '{print $2,"("$1,"posts)"}')
+  fi
+  if [ -n "$LISTD" ]; then
+     passchk
+     PS3="Select a day: "
+     OIFS="$IFS"
+     IFS="
+"
+     select DEL in 'Nevermind!' $LISTD; do
+     IFS="$OIFS"
+     if [ -z "$DEL" ]; then
+        echo 'That was not an option, newb.'
+     elif [ "$DEL" = 'Nevermind!' ]; then
+        echo 'Wussed OUT!'
+        intchkbrk
+     else
+	DELF=$(echo $DEL|cut -d' ' -f1)
+        LSDFILES=$(ls "$DIR"/"$DELF"-*.gpg)
+        OLD_IFS="$IFS"
+IFS="
+"
+        select DELSUB in 'EXIT' $(for k in $LSDFILES; do gpg --passphrase "$PASS" -d "$k" 2>/dev/null|head -1|sed 's/^\(# Subject: \)$/\1(No Subject)/g'|cut -d" " -f3-;done); do
+        if [ -n "$WRONGPASS" -a -n "$INTER" ]; then
+           WRONGPASS=''
+           break
+        elif [ -z "$DELSUB" ]; then
+           echo "That was not an option."
+           intchkbrk
+        elif [ "$DELSUB" = 'EXIT' ]; then
+           echo "Nothing deleted... for now."
+           intchkbrk
+        else
+           let REPLY=REPLY-1
+           DELFILE=$(echo "$LSDFILES"|nl -s" " -w1|grep "^$REPLY "|cut -d" " -f2-)
+           read -n1 -p "Seriously delete this entry? (y/N): " DELANS
+           if [ -z "$DELANS" ]; then
+              echo "Entry has been deleted anyway! (psych!)"
+           elif [ "$DELANS" = "n" ]; then
+              echo -e "\nEntry was not deleted. Way to go, Herodotus."
+           elif [ "$DELANS" = "y" ]; then
+                rm -f "$DELFILE"
+                echo -e "\nDespite your deletion, you can never unlive that day."
+           elif [ -n "$DELANS" -a "$DELANS" != "n" -a "$DELANS" != "y" ]; then
+                echo -e "\nThat... was not an option. I delete NOTHING."
+           fi
+        fi
+        break
+        done
+        IFS="$OLD_IFS"
+        intchkbrk
+     fi
+     done
+  else
+     ENTRIES=$(ls "$DIR")
+     if [ -z "$ENTRIES" ]; then
+        echo 'No entries created yet. You need to get out more.'
+     else
+        echo "Month or year given is WRONG WRONG WRONG!"
+     fi
+     if [ "$INTER" != "1" ]; then
+        exit
+     fi
+  fi
+}
+if [ "$1" = "-d" ]; then
+   if [ -n "$2" ]; then
+      DLISTY="$@"
+   fi
+   deletey
+fi
+
+# Grep text within the entries
+searchy ()
+{
+   passchk
+   if [ -n "$WRONGPASS" ]; then
+      WRONGPASS=''
+   else
+      rm -f "$BSFILE"
+      touch "$BSFILE"
+      START="0"
+      PERCENT="0"
+      MAX=$(echo "$SMONTH"|wc -l)
+      echo -n "Searching... 0%"
+      for EFILES in $SMONTH; do
+      searchtime
+      SFILE=`echo "$EFILES"|cut -d"-" -f-3`
+      FCONTENTS=$(gpg --passphrase "$PASS" -d "$DIR"/"$EFILES" 2>/dev/null|sed '2d')
+      STITLE=$(echo "$FCONTENTS"|head -1|sed 's/^\(# Subject: \)$/\1(No Subject)/g'|cut -d" " -f3-)
+      echo "$FCONTENTS" |
+      if [ "$ICASE" = "-i" ]; then
+         egrep -i "$STERM" |
+         sed "s/^\(.*\)$/# $STITLE ($SFILE):\n\1\n--/g" >>"$BSFILE"
+      else
+         egrep "$STERM" |
+         sed "s/^\(.*\)$/# $STITLE ($SFILE):\n\1\n--/g" >>"$BSFILE"
+      fi
+      done
+      echo -n ""
+      echo -n "100%"
+      echo ""
+      if [ -s "$BSFILE" ]; then
+         less "$BSFILE"
+      else
+         echo 'Search came up with squat.'
+	 ENTRIES=$(ls "$DIR")
+	 if [ -z "$ENTRIES" ]; then
+	    echo 'The utter lack of entries might be a factor in this.'
+	 fi
+      fi
+      rm -f "$BSFILE"
+   fi
+}
+if [ "$1" = "-f" -o "$1" = "-fi" ]; then
+   if [ -z "$2" ]; then
+      echo 'No search term given. Did you lose that, too?'
+      exit 1
+   fi
+   if [ "$1" = "-fi" ]; then
+      ICASE="-i"
+   fi
+   if [ -n "$3" ]; then
+      MONTHOP=$(echo "$3"|monthgrep)
+      if [ -z "$MONTHOP" ]; then
+         echo "What the heck kind of month is THAT?"
+         echo "You might want to consider putting that"
+         echo "search term in quotes."
+         SMONTH="$(ls $DIR)"
+      else
+         SMONTH="$(ls $DIR|grep "$MONTHOP")"
+      fi
+   else
+      SMONTH="$(ls $DIR)"
+   fi
+   STERM="$2"
+   BSFILE="/tmp/.bournal.search"
+   searchy
+   exit
+fi
+
+# Change password
+if [ "$1" = "-p" ]; then
+   changepass
+   exit
+fi
+
+# Ignore this
+if [ "$1" = "--heh" ]; then
+   echo -e "A wizard has turned you into a whale."
+   read -e -p "Is this awesome (Y/N)? " AWESOME
+   if [ "$AWESOME" = "Y" -o "$AWESOME" = "y" ]; then
+      echo "Damn skippy!"
+   elif [ "$AWESOME" = "N" -o "$AWESOME" = "n" ]; then
+      echo "Go back to EATING BABIES, you heartless monster!"
+   else
+      echo "WHARRGARBL!!"
+   fi
+   exit
+fi
+
+# Interactive mode
+if [ "$1" = "-i" ]; then
+   INTER="1"
+   passchk
+   if [ -n "$WRONGPASS" ]; then
+      exit 1
+   fi
+   echo 'Welcome to Bournal: The Anti-Blog'
+   echo 'Type "help" for a list of commands.'
+   set -o emacs
+   bind 'set show-all-if-ambiguous on'
+   bind 'set completion-ignore-case on'
+   bind 'TAB:dynamic-complete-history'
+   CMDS="help new ls lst find del passwd version quit"
+   for i in $CMDS; do
+      history -s $i
+   done
+   compgen -W "$CMDS" cmds
+   while true; do
+      read -e -p "`whoami`@bournal:/$ " COM
+      history -s "$COM"
+      datevars
+      FINDY=`echo "$COM"|grep "^find "`
+      LISTY=`echo "$COM"|grep "^ls\ "`
+      DLISTY=`echo "$COM"|grep "^del\ "`
+      if [ "$COM" != "help" -a "$COM" != "h" -a "$COM" != "new" -a "$COM" != "n" -a "$COM" != "quit" -a "$COM" != "q" -a "$COM" != "ls" -a "$COM" != "lst" -a "$COM" != "del" -a "$COM" != "r" -a "$COM" != "read" -a "$COM" != "passwd" -a "$COM" != "v" -a "$COM" != "version" -a -z "$FINDY" -a -z "$LISTY" -a -z "$DLISTY" ]; then
+         echo 'Command not found! What part of "type help" do you not understand?'
+      elif [ "$COM" = "help" -o "$COM" = "h" ]; then
+         echo '  h, help                  Display this help'
+         echo '  n, new                   Write a new entry'
+         echo '  lst                      List and edit entries made today'
+         echo '  ls [MONTH] [YEAR]        List and edit archived entries'
+         echo '  del [MONTH] [YEAR]       List and delete archived entries'
+         echo '  find [-i] [...] [MONTH]  Find [case-insensitive] text'
+         echo '  r, read                  Read all entries at once'
+         echo '  passwd                   Change encryption password'
+         echo '  v, version               Show version information'
+         echo '  q, quit                  Quit interactive mode'
+      elif [ "$COM" = "new" -o "$COM" = "n" ]; then
+	 if [ -n "$WRONGPASS" ]; then
+	    WRONGPASS=''
+	 else
+            datevars
+            oldornew
+	 fi
+      elif [ "$COM" = "lst" ]; then
+           ENTRIES=$(ls "$DIR")
+	   LSFILES=$(ls "$DIR"/`date +%b-%d-%Y`-*.gpg 2>/dev/null)
+	   if [ -z "$ENTRIES" ]; then
+	      echo 'No entries created yet. You need to get out more.'
+	   elif [ -z "$LSFILES" ]; then
+	      echo 'No entries made today. Weaksauce.'
+           else
+              lssubsel
+	   fi
+      elif [ "$COM" = "ls" ]; then
+         listy
+      elif [ -n "$LISTY" ]; then
+         listy
+         LISTY=''
+      elif [ "$COM" = "del" ]; then
+         deletey
+      elif [ -n "$DLISTY" ]; then
+         deletey
+	 DLISTY=''
+      elif [ -n "$FINDY" ]; then
+	 FINDY=''
+	 STERM=''
+	 SMONTH=''
+	 ICASE=''
+         FCOM=$(echo "$COM"|sed 's/^find //')
+         ICASE=$(echo "$FCOM"|grep -o "^-i")
+         FMONTH=$(echo "$FCOM"|grep -o " [A-Za-z]*$"|monthgrep)
+         if [ -n "$FMONTH" ]; then
+	    SMONTH=$(ls $DIR|grep $FMONTH)
+            STERM=$(echo "$FCOM"|sed 's/^-i //g'|sed 's/ [A-Za-z]*$//g'|sed -e 's/^"//g' -e 's/"$//g' -e "s/^'//g" -e "s/\'$//g")
+         elif [ -z "$FMONTH" ]; then
+	    SMONTH=$(ls $DIR)
+            STERM=$(echo "$FCOM"|sed 's/^-i //g'|sed 's/^"//g'|sed 's/"$//g')
+         fi
+	 BSFILE="/tmp/.bournal.search"
+	 ARGCOUNT=$(echo "$COM"|wc -w)
+	 if [ "$ARGCOUNT" = "3" -a -n "$ICASE" ]; then
+	    SMONTH=$(ls $DIR)
+	 fi
+         if [ -z "$STERM" ]; then
+            echo 'No search term given, Sherlock.'
+	 else
+            searchy
+	 fi
+      elif [ "$COM" = "read" -o "$COM" = "r" ]; then
+           readall
+      elif [ "$COM" = "passwd" ]; then
+        changepass
+	OIFS="$IFS"
+IFS="
+"
+	PASS="$NPASS"
+	IFS="$OIFS"
+      elif [ "$COM" = "version" -o "$COM" = "v" ]; then
+         echo "$VERSION"
+      elif [ "$COM" = "quit" -o "$COM" = "q" ]; then
+         echo 'So long, screwy! See ya in St. Louis!'
+	 sleep .5
+	 exit 0
+      fi
+   done
+fi
+
+# Create, edit or add entries for the current date
+passchk
+oldornew
+exit 0

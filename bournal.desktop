@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.2
+Name=Bournal
+Comment=Keep a 1337 Journal
+GenericName=Journal
+Type=Application
+Terminal=true
+Exec=bournal -i
+Icon=bournal
+Categories=ConsoleOnly;Utility;TextEditor;

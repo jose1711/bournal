@@ -1,0 +1,54 @@
+#!/bin/bash
+
+echo "Please make a backup of your old entries."
+BACKUP="n"
+while [ "$BACKUP" = "n" ]; do
+echo -n "Have you done it yet? [y/n]"
+read BACKUP
+done   
+
+. "$HOME/.bournalrc"
+
+CPTCHK="$(ls $DIR|grep .cpt)"
+if [ -z "$CPTCHK" ]; then
+   echo -e "Why are you running this? You don't need to run this. STOP RUNNING THIS."
+   exit
+fi
+
+passchk ()
+{
+OIFS="$IFS"
+IFS="
+"
+ if [ -z "$PASS" ]; then
+    echo -n 'Enter decryption key: '
+    PASS=`ccat "$DIR"/.passwd.cpt 2>/dev/null`
+    echo ''
+    if [ -z "$PASS" ]; then
+       echo "That's not right..."
+       echo -n 'Try again: '
+       PASS=`ccat "$DIR"/.passwd.cpt 2>/dev/null`
+       echo ''
+    fi
+    if [ -z "$PASS" ]; then
+       echo "Nope!"
+       echo -n 'Last try, slugger: '
+       PASS=`ccat "$DIR"/.passwd.cpt 2>/dev/null`
+       echo ''
+    fi
+    if [ -z "$PASS" ]; then
+       echo 'Password is incorrect, butterfingers.'
+       exit 1
+    fi
+ fi
+IFS="$OIFS"
+}
+
+passchk
+echo "Converting..."
+ccdecrypt -r -K "$PASS" "$DIR"
+for i in $(ls -1A "$DIR"); do
+   gpg --passphrase "$PASS" -c "$DIR/$i" 2>/dev/null
+   rm -f "$DIR/$i"
+done
+echo "Conversion complete! PRAISE THE LAWDUH! "

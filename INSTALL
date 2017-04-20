@@ -1,0 +1,10 @@
+Manual Method:
+1. Copy the script into a directory in your path (e.g. /usr/local/bin). May require root privileges.
+
+2. Run it, edit the ~/.bournalrc to your liking.
+
+Scripty Method:
+Run: sudo ./install.sh
+
+Script Uninstall:
+Run: sudo ./uninstall.sh

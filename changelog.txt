@@ -1,0 +1,166 @@
+Version 0.1 - S.S. Failboat
+------
+N/A
+
+Version 0.2 - Suicide Notepad
+------
+-Added functions for repetitive codeblocks
+-Replaced a big ugly block of sed/awk/sorting with sort keys for the date-listing option
+-Added functions for formatting options with vim and nano editors
+  +Vim will now open on the line directly below the entry header, in INSERT  mode, with linebreaks at 70 chars
+  +Nano will now open on the line directly below the entry header
+-Added comment labels for sections
+-Added check for the default $EDITOR variables
+-Added check for nano
+-Added check for password file when entry directory exists
+-Added check for unencrypted files
+-Added 50% more sass mouth.
+  +You will wonder why you got that rather than the sandwich you asked for.
+-Nano is now the default editor, so as not to spook newbs.
+
+Version 0.3 - Prettiest Pony
+------
+-Added password checking, which will exit with an error message if password is incorrect
+-Added checks for a missing passwordfile, or if the file is unencrypted, and forces entry of a new one for better security.
+  +If unencrypted, the file is deleted and the previous password is established by checking the encryption key on a previous entry.
+-Edit-checking through md5sum: looks at the hash before and after a file is opened, and spits out a message which varies on whether edits were made or not.
+-Code cleanup.
+-Single keypress enters the choice for header entry.
+-Header changed for standouttiness.
+-The listing option now uses the bash builtin "select."
+-Traps CTRL+C during interaction points, and reencrypts the file before quitting.
+-If vimeditor is set, a custom syntax file is written and used for header highlighting.
+
+Version 0.4 - Cyberpunky Brewster
+------
+-If nanoeditor is set, syntax options are written to ~/.nanorc and used for header highlighting.
+-Lockfile is written to prevent multiple instances. Removed with EXIT trap.
+-Vim syntax changed to only highlight the header lines.
+-Cleaned up the entry searching.
+  +No longer decrypts/reencrypts the files--uses ccat
+  +Pipes the results to less for scrolling and easier searching
+-Added a deletion option
+-Added interactive mode
+  +Password only has to be entered once during the session
+  +Supports all command line options
+  +Password is kept as a plaintext variable, so it is probably wicked unsecure
+
+Version 0.4.5 (security updates, bug fixes)
+-----
+-Added umask and chmod for making entries readable only by then user
+-Fixed a couple variable bugs which affected interactive mode
+-Fixed the brainfart detection for interactive mode
+-The saved-post sass-mouth is now randomly generated
+
+Version 0.5 - Wooshless Wonder
+-----
+-Fixed the day-change bug. Now Bournal re-reads the FILE variable if
+interactive mode is left open over multiple days, causing a new file to be
+created on the current day.
+-Fixed password bug in i-mode. Non-matching passwords would drop you out of
+i-mode.
+-Moved the varying variables (EDITOR, DIRECTORY) to an RC file. More options
+may be added later. This helps options remain static between Bournal versions.
+-Added date-sorting to the listing option, e.g. bournal -l Aug 2008
+-Fixed the entry-listing bug for when a non-listed number or string is entered.
+-Fixed ~/.nanorc highlighting for thursdays, saturdays and sundays
+-Minor code cleanup
+
+Version 0.6 - Deprecated Drama Queen
+-----
+-Fixed a bug in the lister's year filter
+-Changed over to one-file-per-entry system
+  +Only one entry is now visible at once, meaning a cleaner entry interface
+  +Each file has the post-time appended to the filename
+  +Running Bournal without an argument no longer asks whether to make a new subject; all previous entry editing is now done through the -ls/ls commands
+  +The listing and deletion functions are now two-fold: First select a day, then a subject to edit or delete
+-Added a migration script to make old posts conform to the new system.
+
+Version 0.7 - Lachrymose Logfile
+----
+-Interactive mode now supports readline editing (man readline)
+-Per-session history buffer added to interactive mode
+-Password prompts three times before quitting when an incorrect password is given
+-Added a progress meter to the search function
+-Search now shows the title and date of the post in the results
+-Moved the conversion script to a separate file
+
+Version 0.8 - Dot Matrix Diary
+----
+-Added the flag "--hack_the_gibson" which is used to check for new versions.
+-Fixed a bug where the entry would not be listed if the subject line is blank.
+-Rewrote the listing and deletion functions so that they supports selecting entries with identical subject lines or no subject lines.
+-Enhanced the findy section in interactive mode for more accurate argument handling.
+-Cleaned up the code in various places.
+-Added tab-completion to interactive mode.
+-Added a month argument to the searchy function for per-month searches. Yay, faster searches!
+-Fixed a listy bug which caused days to be shown multiple times when both the month and year arguments were given.
+
+Version 0.9 - Melodramatic Memoirs
+----
+-Vim swp files that are left after an unexpected quit no longer trigger the re-encryption function.
+-Fixed vim syntax highlighting. Was looking at me funny. I FIXED IT GOOD.
+-Fixed a typo that caused "oct" to be read as an invalid month when listing.
+-Both the "-ls" and "-l" flags work, for better intuitiveness.
+-Added an "-lst" flag, which only lists entries made today.
+-Moved the subject lister to its own function for the -lst flag to use separately.
+-Added month and year arguments to the del command for more specific deletions.
+-Eliminated the "d" command in i-mode for no good reason at all.
+-Removed the check for older entry files, as well as the conversion script.
+-Added installation and uninstallation scripts JUST FOR YOU.
+-Added an easter egg. OOOOOOOH! :o
+
+Version 1.0 - Micturating into the Zephyr
+----
+-Rewrote the reencyption code for unencrypted entries to be more eloquent.
+-Added support for spaces at the beginning of passwords.
+-Updated the main help output to show the missing month argument for the find options.
+-Updated the manpage for more specific instructions for the find options, info
+on interactive mode, and more relevant "SEE ALSO" entries.
+-Added a check for Vim recovery files.
+
+Version 1.1 - Tear-stained Terminal
+----
+-Moved the --help, --version, and --hack_the_planet conditions above the
+lockfile creator so they can be used while another bournal instance is
+running.
+-Rewrote the search code in interactive mode, because it was doing god knows
+what.
+-Searches no longer include the date line, so a search for "sep" will come up
+with "sepsis" or "septum," but not all entries made in September.
+
+Version 1.2 - Gloomy GNU
+----
+-Fixed a bug in the lister that would output "thank god you edited that" even
+when EXIT was selected.
+-The lister and deleter now count the number of entries made per day.
+
+Version 1.3 - Pouty Penguin
+----
+-Added a .desktop file
+-Added icons
+-Improved startup for new journals
++New password prompt will loop continuously until you get it right.
++chmod errors are suppressed if no entry directory is found
++Flags are read after a fresh creation of default files and password entry
++Listing, deleting and finding functions are now aware when there are no entries and will mock your lack of living life to the fullest.
+
+Version 1.4 - Exanimate XTerm
+----
+-Added function for jed editor
++Added jededitor option to default .bournalrc
+-Added "set nobackup" and "set nowritebackup" to vimeditor function
+-Added readall function to decrypt and read all files in less
++Added -r flag to trigger readall
++Added 'r' and 'read' commands in interactive mode to trigger readall
+
+Version 1.4.1 (Security fix)
+----
+-Removed the "--hack_the_gibson" flag due to security concerns.
+-Bournal no longer runs in FreeBSD for mysterious reason.
+
+Version 1.5 - Sudo-cide
+---
+-Swapped out ccrypt with gpg
++Added a conversion script for the switchover
+-Restored FreeBSD functions
